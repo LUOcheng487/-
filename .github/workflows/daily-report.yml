@@ -1,0 +1,41 @@
+name: 禁售日报推送
+
+on:
+  schedule:
+    # GitHub cron 用UTC：23:30 UTC = 北京时间次日 07:30
+    # 注意：GitHub 定时任务可能有几分钟延迟，属正常现象
+    - cron: '30 23 * * *'
+    # 【可选】晚间完整版：本地数据白天陆续补齐后，20:30 再推一次同一天的完整汇总。
+    # 需要时去掉下行注释即可（12:30 UTC = 北京 20:30），报告日期取"前一天的昨天"需配合 REPORT_DATE，
+    # 简单做法：直接取消注释，晚间收到的是"今天凌晨为止的昨天数据补全版"由 --date 参数控制，见下方step。
+    # - cron: '30 12 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '报告日期 YYYY-MM-DD（留空=北京时间昨天）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: report/requirements.txt
+
+      - run: pip install -r report/requirements.txt
+
+      - name: 生成并发送日报
+        env:
+          DING_WEBHOOK: ${{ secrets.DING_WEBHOOK }}
+          DING_SECRET: ${{ secrets.DING_SECRET }}
+          REPORT_DATE: ${{ github.event.inputs.date }}
+        run: python report/daily_report.py --data-dir data

@@ -1,0 +1,15 @@
+{
+  "timezone": "Asia/Shanghai",
+  "platforms": [
+    { "name": "飞猪",   "schema": "feizhu",    "file": "飞猪.xlsx",     "local_path": "D:\\Excel\\飞猪.xlsx" },
+    { "name": "去哪儿", "schema": "qunar_ttr", "file": "去哪儿ttr.xlsx", "local_path": "D:\\Excel\\去哪儿ttr.xlsx" },
+    { "name": "美团",   "schema": "meituan",   "file": "美团.xlsx",     "local_path": "D:\\Excel\\美团.xlsx" },
+    { "name": "同程",   "schema": "auto",      "file": "同程(1).xlsx",  "local_path": "D:\\Excel\\同程(1).xlsx" },
+    { "name": "智行",   "schema": "zx",        "file": "智行.xlsx",     "local_path": "D:\\Excel\\智行.xlsx" },
+    { "name": "携程",   "schema": "zx",        "file": "携程.xlsx",     "local_path": "D:\\Excel\\携程.xlsx" }
+  ],
+  "dingtalk": {
+    "webhook": "",
+    "secret": ""
+  }
+}
