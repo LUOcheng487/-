@@ -48,6 +48,12 @@ def main():
     os.chdir(REPO_ROOT)
     os.makedirs(DATA_DIR, exist_ok=True)
 
+    # 先拉取远端最新代码和数据（多台电脑时自动获得脚本更新和其他机器的数据）
+    p = git("pull", "--rebase", "--autostash", check=False)
+    if p.returncode != 0:
+        git("rebase", "--abort", check=False)
+        print(f"拉取远端失败(下个周期重试): {p.stderr.strip()[:200]}")
+
     with open(os.path.join(REPO_ROOT, "config.json"), encoding="utf-8") as f:
         config = json.load(f)
 
