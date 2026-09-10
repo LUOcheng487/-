@@ -28,7 +28,7 @@ sync_push.py 拷贝到 data/ 并 push      ▼
 在 github.com 网页上新建一个 **Private** 仓库（如 `ban-daily-report`），然后在本目录执行：
 
 ```bat
-cd /d D:\vsPython\AI留单\ban_daily_report
+cd /d D:\vsPython\禁售消息自动推送
 git remote add origin https://github.com/<你的用户名>/ban-daily-report.git
 git push -u origin main
 ```
@@ -50,7 +50,7 @@ git push -u origin main
 
 ```bat
 schtasks /Create /TN "禁售数据同步GitHub" /SC MINUTE /MO 15 ^
-  /TR "\"C:\Users\admin\AppData\Local\Programs\Python\Python312\pythonw.exe\" \"D:\vsPython\AI留单\ban_daily_report\sync\sync_push.py\"" /F
+  /TR "\"C:\Users\admin\AppData\Local\Programs\Python\Python312\pythonw.exe\" \"D:\vsPython\禁售消息自动推送\sync\sync_push.py\"" /F
 ```
 
 立即手动跑一次验证：直接双击执行 `sync\sync_push.py`（或命令行 `python sync\sync_push.py`），
@@ -62,7 +62,7 @@ schtasks /Create /TN "禁售数据同步GitHub" /SC MINUTE /MO 15 ^
 钉钉群应收到消息；也可本地先试跑（不发送）：
 
 ```bat
-cd /d D:\vsPython\AI留单\ban_daily_report
+cd /d D:\vsPython\禁售消息自动推送
 pip install -r report\requirements.txt
 python report\daily_report.py --excel-dir "D:\Excel" --date 2026-09-09 --dry-run
 ```
