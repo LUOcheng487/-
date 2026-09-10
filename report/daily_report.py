@@ -18,7 +18,6 @@ import os
 import sys
 import time
 import urllib.parse
-
 import pandas as pd
 import requests
 from zoneinfo import ZoneInfo
@@ -105,6 +104,11 @@ def load_platforms(config, data_dir, excel_dir):
             path = os.path.join(excel_dir, os.path.basename(p["local_path"]))
         else:
             path = os.path.join(data_dir, p["file"])
+            # 本地直接运行且尚未执行过数据同步时，回退读取 D:\Excel 原始文件
+            # （云端Actions上 local_path 不存在，不受影响）
+            if not os.path.exists(path) and os.path.exists(p.get("local_path", "")):
+                print(f"[本地回退] {name}: data/{p['file']} 不存在，直接读取 {p['local_path']}")
+                path = p["local_path"]
         if not os.path.exists(path):
             notes.append(f"{name}: 文件缺失({path})")
             continue
