@@ -10,12 +10,14 @@ import datetime as dt
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Asia/Shanghai")
+HOST = socket.gethostname()  # 多台电脑同步时区分来源
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(REPO_ROOT, "data")
 
@@ -60,23 +62,34 @@ def main():
     if failed:
         print("以下文件同步失败(下个周期重试): " + "; ".join(failed))
 
-    with open(os.path.join(DATA_DIR, "_sync_info.json"), "w", encoding="utf-8") as f:
-        json.dump({"synced_at": dt.datetime.now(TZ).strftime("%Y-%m-%d %H:%M")},
-                  f, ensure_ascii=False)
+    # 同步信息按机器名分文件，避免多台电脑互推时冲突
+    info_path = os.path.join(DATA_DIR, f"_sync_info_{HOST}.json")
+    with open(info_path, "w", encoding="utf-8") as f:
+        json.dump({"synced_at": dt.datetime.now(TZ).strftime("%Y-%m-%d %H:%M"),
+                   "host": HOST}, f, ensure_ascii=False)
 
     git("add", "data")
     status = git("status", "--porcelain", "--", "data", check=False)
-    if not status.stdout.strip():
+    # 本地是否有未推送的提交（如上次推送失败遗留），有则仍需推送
+    ahead_r = git("rev-list", "--count", "@{u}..HEAD", check=False)
+    ahead = ahead_r.stdout.strip() if ahead_r.returncode == 0 else "unknown"
+    if not status.stdout.strip() and ahead == "0":
         print("数据无变化，跳过推送")
         return 0
 
     ident = ("-c", "user.name=ban-sync", "-c", "user.email=ban-sync@users.noreply.github.com")
-    msg = f"data: sync {dt.datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
-    git(*ident, "commit", "-m", msg)
+    msg = f"data: sync {HOST} {dt.datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
+    if status.stdout.strip():
+        git(*ident, "commit", "-m", msg)
 
-    if git("push", check=False).returncode != 0:
-        # 远端有新提交(如网页上改了config)时先合并再推
-        git("pull", "--rebase", "--autostash", check=False)
+    r = git("push", check=False)
+    if r.returncode != 0:
+        # 远端有新提交(如另一台电脑先推了)时，先变基合并再推
+        p = git("pull", "--rebase", "--autostash", check=False)
+        if p.returncode != 0:
+            git("rebase", "--abort", check=False)  # 解除卡在中间的rebase状态，下个周期重试
+            print(f"合并远端失败(下个周期自动重试): {p.stderr.strip()[:200]}")
+            return 1
         if git("push", check=False).returncode != 0:
             print("推送失败，请检查网络/GitHub凭据")
             return 1

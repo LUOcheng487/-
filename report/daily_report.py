@@ -11,6 +11,7 @@
 import argparse
 import base64
 import datetime as dt
+import glob
 import hashlib
 import hmac
 import json
@@ -242,11 +243,11 @@ def main():
         df_all = df_all[t.dt.date == target_date].copy()
 
     sync_time = None
-    info = os.path.join(args.data_dir, "_sync_info.json")
-    if os.path.exists(info):
+    for info in sorted(glob.glob(os.path.join(args.data_dir, "_sync_info*.json")),
+                       key=os.path.getmtime):
         try:
             with open(info, encoding="utf-8") as f:
-                sync_time = json.load(f).get("synced_at")
+                sync_time = json.load(f).get("synced_at")  # 取最新一台机器的
         except Exception:
             pass
 
