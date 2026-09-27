@@ -26,7 +26,7 @@ from zoneinfo import ZoneInfo
 TZ = ZoneInfo("Asia/Shanghai")
 
 
-# ---------------- 各平台适配器：统一输出 [航司, 时间, 时长分钟] ----------------
+# ---------------- 各平台适配器：统一输出 [航司, 店铺, 时间, 时长分钟] ----------------
 # 航司为 None 的行：美团=平台级禁售(无航司维度)；其他平台=未指定航司(全店/全部航线)
 
 def _norm_airline(v):
@@ -38,11 +38,37 @@ def _norm_airline(v):
     return s
 
 
+def _norm_store(v):
+    """统一各平台的店铺/站点/域名/票台标识。"""
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(v, float) and v.is_integer():
+        s = str(int(v))
+    else:
+        s = str(v).strip()
+    if s.upper() in ("", "*", "NAN", "NONE", "全部", "所有"):
+        return None
+    return s
+
+
+def _optional_col(df, name):
+    """取可选列；老文件没有店铺列时按未指定店铺处理。"""
+    if name in df.columns:
+        return df[name]
+    return pd.Series([None] * len(df), index=df.index)
+
+
 def adapter_feizhu(df):
     """飞猪: 下线航司 / 屏蔽开始 / 下线时长(分钟)"""
     t = pd.to_datetime(df["屏蔽开始"], errors="coerce")
     return pd.DataFrame({
         "航司": df["下线航司"].map(_norm_airline),
+        "店铺": _optional_col(df, "店铺").map(_norm_store),
         "时间": t,
         "时长": pd.to_numeric(df["下线时长(分钟)"], errors="coerce"),
     })
@@ -54,6 +80,7 @@ def adapter_qunar(df):
     t2 = pd.to_datetime(df["解除禁售时间"], errors="coerce")
     return pd.DataFrame({
         "航司": df["航司代码"].map(_norm_airline),
+        "店铺": _optional_col(df, "域名").map(_norm_store),
         "时间": t,
         "时长": (t2 - t).dt.total_seconds() / 60,
     })
@@ -63,6 +90,7 @@ def adapter_meituan(df):
     """美团: 只有站点维度，无航司。禁售开始(下线时间) / 禁售时长(分钟)"""
     return pd.DataFrame({
         "航司": None,
+        "店铺": _optional_col(df, "站点").map(_norm_store),
         "时间": pd.to_datetime(df["禁售开始(下线时间)"], errors="coerce"),
         "时长": pd.to_numeric(df["禁售时长(分钟)"], errors="coerce"),
     })
@@ -75,7 +103,12 @@ def adapter_zx(df):
     t3 = pd.to_datetime(df["实际解禁时间"], errors="coerce")
     dur = (t2 - t).dt.total_seconds() / 60
     dur = dur.fillna((t3 - t).dt.total_seconds() / 60)
-    return pd.DataFrame({"航司": df["出票航司"].map(_norm_airline), "时间": t, "时长": dur})
+    return pd.DataFrame({
+        "航司": df["出票航司"].map(_norm_airline),
+        "店铺": _optional_col(df, "票台").map(_norm_store),
+        "时间": t,
+        "时长": dur,
+    })
 
 
 # schema名: (适配函数, 识别列, 是否有航司维度)
@@ -149,8 +182,15 @@ def build_message(df_all, target_date, notes, sync_time):
         total_n, total_min = len(df_all), df_all["时长"].sum()
         md += f"\n\n共 **{total_n} 次** / 累计 **{fmt_min(total_min)} min**\n\n---"
 
+        # 各适配器都会输出“店铺”。为兼容旧数据/旧适配器，缺失时显示为未指定店铺。
+        if "店铺" not in df_all.columns:
+            df_all = df_all.copy()
+            df_all["店铺"] = None
+        df_all = df_all.copy()
+        df_all["店铺显示"] = df_all["店铺"].map(_norm_store).fillna("未指定店铺")
+
         with_air = df_all[df_all["有航司维度"] & df_all["航司"].notna()]
-        g = (with_air.groupby(["航司", "平台"])
+        g = (with_air.groupby(["航司", "平台", "店铺显示"])
              .agg(n=("航司", "size"), m=("时长", "sum")).reset_index())
 
         # 航司按总时长降序、次数降序
@@ -158,22 +198,42 @@ def build_message(df_all, target_date, notes, sync_time):
                  .sort_values(["m", "n"], ascending=False))
         for air, row in order.iterrows():
             md += f"\n\n**{air}** ｜ {int(row.n)}次 ｜ {fmt_min(row.m)}min"
-            sub = g[g["航司"] == air].sort_values(["n", "m"], ascending=False)
-            for _, r in sub.iterrows():
-                md += f"\n\n- {r['平台']}：{int(r.n)}次 ｜ {fmt_min(r.m)}min"
+            sub = g[g["航司"] == air]
+            platform_order = (sub.groupby("平台").agg(n=("n", "sum"), m=("m", "sum"))
+                              .sort_values(["n", "m"], ascending=False))
+            for platform, platform_row in platform_order.iterrows():
+                md += f"\n\n- {platform}：{int(platform_row.n)}次 ｜ {fmt_min(platform_row.m)}min"
+                stores = sub[sub["平台"] == platform].sort_values(
+                    ["n", "m", "店铺显示"], ascending=[False, False, True])
+                for _, store_row in stores.iterrows():
+                    md += (f"\n  - 店铺 {store_row['店铺显示']}："
+                           f"{int(store_row.n)}次 ｜ {fmt_min(store_row.m)}min")
 
         # 平台级（美团，无航司维度）
         plat = df_all[~df_all["有航司维度"]]
         if not plat.empty:
             md += "\n\n---\n\n**平台级禁售（无航司维度）**"
             for p, r in (plat.groupby("平台").agg(n=("平台", "size"), m=("时长", "sum"))
-                         .sort_values("n", ascending=False)).iterrows():
+                         .sort_values(["n", "m"], ascending=False)).iterrows():
                 md += f"\n\n- {p}：{int(r.n)}次 ｜ {fmt_min(r.m)}min"
+                stores = (plat[plat["平台"] == p]
+                          .groupby("店铺显示")
+                          .agg(n=("平台", "size"), m=("时长", "sum"))
+                          .sort_values(["n", "m"], ascending=False))
+                for store, store_row in stores.iterrows():
+                    md += (f"\n  - 店铺 {store}："
+                           f"{int(store_row.n)}次 ｜ {fmt_min(store_row.m)}min")
 
         # 未指定航司（全店/全部航线）
         unspec = df_all[df_all["有航司维度"] & df_all["航司"].isna()]
         if not unspec.empty:
             md += f"\n\n> 未指定航司(全店/全部航线)：{len(unspec)}次 ｜ {fmt_min(unspec['时长'].sum())}min"
+            stores = (unspec.groupby(["平台", "店铺显示"])
+                      .agg(n=("平台", "size"), m=("时长", "sum"))
+                      .sort_values(["n", "m"], ascending=False))
+            for (platform, store), store_row in stores.iterrows():
+                md += (f"\n> - {platform} / 店铺 {store}："
+                       f"{int(store_row.n)}次 ｜ {fmt_min(store_row.m)}min")
 
     foot = []
     if notes:
