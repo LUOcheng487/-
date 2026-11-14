@@ -25,6 +25,12 @@ HOST = socket.gethostname()  # 多台电脑同步时区分来源
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(REPO_ROOT, "data")
 
+# pythonw 静默运行时 stdout/stderr 可能为 None，避免 print 直接崩溃
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+
 # 网络类错误关键词：偶发抖动，值得重试
 _NETWORK_RE = re.compile(
     r"connection was reset|could not connect|failed to connect|timed out|timeout|"
@@ -186,17 +192,18 @@ def main():
 
     git("add", "data")
     status = git("status", "--porcelain", "--", "data", check=False)
+    status_out = status.stdout.strip() if status is not None else ""
     # 本地是否有未推送的提交（如上次推送失败遗留），有则仍需推送
     ahead_r = git("rev-list", "--count", "@{u}..HEAD", check=False)
     ahead = ahead_r.stdout.strip() if ahead_r is not None and ahead_r.returncode == 0 else "unknown"
-    if not status.stdout.strip() and ahead == "0":
+    if not status_out and ahead == "0":
         print("数据无变化，跳过推送")
         write_sync_log("skipped", "数据无变化")
         return 0
 
     ident = ("-c", "user.name=ban-sync", "-c", "user.email=ban-sync@users.noreply.github.com")
     msg = f"data: sync {HOST} {dt.datetime.now(TZ).strftime('%Y-%m-%d %H:%M')}"
-    if status.stdout.strip():
+    if status_out:
         git(*ident, "commit", "-m", msg)
 
     r = git("push", check=False)
