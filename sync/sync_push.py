@@ -33,10 +33,12 @@ if sys.stderr is None:
 
 # 网络类错误关键词：偶发抖动，值得重试
 _NETWORK_RE = re.compile(
-    r"connection was reset|could not connect|failed to connect|timed out|timeout|"
-    r"recv failure|early eof|network is down|unexpected eof|connection refused|"
-    r"operation now in progress|failed to receive|broken pipe|handshake failure|"
-    r"connection closed by peer|reset by peer",
+    r"connection was reset|could not connect|failed to connect|couldn't connect|"
+    r"timed out|timeout|recv failure|early eof|network is down|unexpected eof|"
+    r"connection refused|operation now in progress|failed to receive|broken pipe|"
+    r"handshake failure|connection closed by peer|reset by peer|"
+    r"operation too slow|less than \d+ bytes|low speed|slow transfer|"
+    r"connection timed out",
     re.I,
 )
 # 业务/致命错误：重试无意义，直接返回
@@ -46,15 +48,15 @@ _FATAL_RE = re.compile(
     re.I,
 )
 
-# 网络参数：10s 内必须完成建连；带宽低于 1KB/s 持续 15s 判定断链，快速失败进入重试
+# 网络参数：10s 内必须完成建连；带宽低于 100B/s 持续 30s 判定断链，快速失败进入重试
 _GIT_NET_OPTS = [
     "-c", "http.connectTimeout=10",
-    "-c", "http.lowSpeedLimit=1000",
-    "-c", "http.lowSpeedTime=15",
+    "-c", "http.lowSpeedLimit=100",
+    "-c", "http.lowSpeedTime=30",
 ]
 
-RETRY_DELAYS = (5, 10, 20)  # 指数退避（秒），对应第 1/2/3 次重试
-GIT_TIMEOUT = 60            # 单条 git 命令整体超时（秒）
+RETRY_DELAYS = (5, 10, 20, 30)  # 指数退避（秒），对应各次重试
+GIT_TIMEOUT = 60               # 单条 git 命令整体超时（秒）
 
 
 def _resolve_git() -> str:
@@ -84,7 +86,7 @@ def _is_network_error(stderr: str) -> bool:
     return bool(_NETWORK_RE.search(stderr))
 
 
-def git(*args, check=True, retries=3, timeout=GIT_TIMEOUT):
+def git(*args, check=True, retries=4, timeout=GIT_TIMEOUT):
     """
     调用 git。网络类失败按 RETRY_DELAYS 退避重试；其余失败原样返回。
     check=True 且最终失败时抛 RuntimeError；check=False 时返回进程结果供调用方判断。
