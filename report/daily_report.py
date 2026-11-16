@@ -250,6 +250,62 @@ def fmt_min(m):
     return f"{int(m)}" if abs(m - int(m)) < 1e-9 else f"{m:.1f}"
 
 
+# ---------------- 数据新鲜度闸门 ----------------
+
+def parse_synced_at(s):
+    """把 _sync_info 里的 'YYYY-MM-DD HH:MM(:SS)' 解析为北京时区 datetime；失败返回 None"""
+    if not s or not isinstance(s, str):
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return dt.datetime.strptime(s.strip(), fmt).replace(tzinfo=TZ)
+        except ValueError:
+            continue
+    return None
+
+
+def latest_sync(data_dir):
+    """返回 (最新 synced_at 原文, 解析后的 datetime 或 None)，取所有机器里最新的一条"""
+    raw, best = None, None
+    for info in glob.glob(os.path.join(data_dir, "_sync_info*.json")):
+        try:
+            with open(info, encoding="utf-8") as f:
+                obj = json.load(f)
+            t = parse_synced_at(obj.get("synced_at"))
+        except Exception:
+            continue
+        if t and (best is None or t > best):
+            best, raw = t, obj.get("synced_at")
+    return raw, best
+
+
+def check_gate(data_dir, gate_time):
+    """
+    当天是否允许发钉钉。
+    规则：仓库里最近一次数据同步必须不早于"今天 gate_time"（北京时间）；
+          否则视为当天没推送禁售信息，当天不发。
+    gate_time 为空则关闭闸门（始终放行）。
+    返回 (是否放行, 原因说明)。
+    """
+    if not gate_time:
+        return True, "闸门已关闭(--gate-time 为空)"
+
+    now = dt.datetime.now(TZ)
+    try:
+        hh, mm = (int(x) for x in gate_time.split(":"))
+        gate = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    except Exception:
+        return True, f"gate-time 格式无法解析({gate_time})，跳过闸门检查"
+
+    raw, latest = latest_sync(data_dir)
+    if latest is None:
+        return False, "仓库内没有可用的数据同步记录(_sync_info*.json 缺失或损坏)"
+    if latest < gate:
+        return False, (f"最近一次数据同步是 {raw}，早于今天 {gate_time}，"
+                       f"判定当天未推送禁售信息")
+    return True, f"最近一次数据同步是 {raw}，已不早于今天 {gate_time}"
+
+
 # ---------------- 钉钉推送 ----------------
 
 def send_dingtalk(webhook, secret, title, text):
@@ -283,8 +339,17 @@ def main():
     ap.add_argument("--data-dir", default="data", help="云端：各平台xlsx所在目录")
     ap.add_argument("--excel-dir", default=None, help="本地：D:\\Excel 原始目录(优先)")
     ap.add_argument("--date", default=None, help="报告日期YYYY-MM-DD，默认=北京时间昨天")
+    ap.add_argument("--gate-time", default=None,
+                    help="数据同步闸门 HH:MM（北京），最近同步早于今天该时刻则当天不发；"
+                         "传空串关闭闸门。默认取环境变量 GATE_TIME，否则 11:00")
+    ap.add_argument("--force", action="store_true",
+                    help="忽略闸门与空数据检查，强制发送（手动补发用）")
     ap.add_argument("--dry-run", action="store_true", help="只打印消息不发送")
     args = ap.parse_args()
+
+    gate_time = args.gate_time if args.gate_time is not None \
+        else os.environ.get("GATE_TIME", "11:00")
+    force = args.force or os.environ.get("FORCE", "").strip().lower() in ("1", "true", "yes")
 
     cfg_path = args.config or os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
@@ -302,14 +367,7 @@ def main():
         t = pd.to_datetime(df_all["时间"], errors="coerce")
         df_all = df_all[t.dt.date == target_date].copy()
 
-    sync_time = None
-    for info in sorted(glob.glob(os.path.join(args.data_dir, "_sync_info*.json")),
-                       key=os.path.getmtime):
-        try:
-            with open(info, encoding="utf-8") as f:
-                sync_time = json.load(f).get("synced_at")  # 取最新一台机器的
-        except Exception:
-            pass
+    sync_time, _ = latest_sync(args.data_dir)  # 取最新一台机器的
 
     text = build_message(df_all, target_date, notes, sync_time)
     print("=" * 60)
@@ -317,8 +375,22 @@ def main():
     print("=" * 60)
 
     if args.dry_run:
+        pass_ok, reason = check_gate(args.data_dir, gate_time)
+        print(f"[闸门] {'放行' if pass_ok else '拦截'}：{reason}")
         print("[dry-run] 未发送")
         return 0
+
+    if not force:
+        pass_ok, reason = check_gate(args.data_dir, gate_time)
+        print(f"[闸门] {'放行' if pass_ok else '拦截'}：{reason}")
+        if not pass_ok:
+            print(f"当天不发送钉钉：{reason}")
+            return 0
+        if df_all.empty:
+            print(f"报告日期 {target_date} 在 data 中没有禁售记录，当天不发送钉钉")
+            return 0
+    else:
+        print("[force] 已跳过闸门与空数据检查")
 
     webhook = os.environ.get("DING_WEBHOOK") or config.get("dingtalk", {}).get("webhook", "")
     secret = os.environ.get("DING_SECRET") or config.get("dingtalk", {}).get("secret", "")
