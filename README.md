@@ -13,16 +13,18 @@ D:\Excel\6个平台xlsx          GitHub 私有仓库
       │                         ├── report/         ← 汇总+推送脚本
       │  白天电脑开机时           ├── sync/           ← 本地同步脚本
       │  每15分钟自动             └── .github/workflows/
-      ▼                                │  每天 1:00 UTC（北京 09:00）云端自动跑
+      ▼                                │  每天 08:58 本机计划任务触发云端发报
 sync_push.py 拷贝到 data/ 并 push      ▼
 （无变化零开销）              daily_report.py 读 data/ → 有昨日数据才发 → 钉钉机器人
 ```
 
 核心思路（回答两个关键问题）：
 
-1. **不挂电脑怎么定时发**：发送任务跑在 GitHub Actions 云端，上午 09:00 你电脑开不开机都不影响。
+1. **准点靠什么保证**：发送本身跑在 GitHub Actions 云端，但 GitHub 自带定时排队延迟可达数小时
+   （实测被推后到晚上 19:2x）。因此改为**本机计划任务每天 08:58 调 API 主动触发**（只花几秒），
+   云端随即在 09:00 左右发报；另有一条 9:10 兜底任务，8:58 未成功时补一次，已成功则自动跳过。
 2. **云端怎么读本地 Excel**：数据在白天产生时就随同步脚本推到仓库 `data/` 目录（电脑白天反正开着抓数据），
-   09:00 时 Actions 直接读仓库里的最新数据。**数据白天随产生随同步，发送完全在云端，两者解耦。**
+   发报时 Actions 直接读仓库里的最新数据。**数据白天随产生随同步，发送完全在云端，两者解耦。**
 
 ## 部署步骤（一次性）
 
@@ -69,6 +71,25 @@ cd /d D:\vsPython\禁售消息自动推送
 pip install -r report\requirements.txt
 python report\daily_report.py --excel-dir "D:\Excel" --date 2026-09-09 --dry-run
 ```
+
+## 准时触发（本机计划任务）
+
+GitHub 自带的 schedule 已移除——它的排队延迟可达数小时，而且与本机触发叠加会导致同一天发两条。
+现在由本机两条计划任务控制发报时间：
+
+| 任务名 | 时间 | 作用 |
+|---|---|---|
+| 禁售日报云端触发 | 每天 **08:58** | 调 `workflow_dispatch` 触发云端发报 |
+| 禁售日报兜底触发 | 每天 **09:10** | 带 `--skip-if-run-today`：今天已有成功/进行中的触发就跳过，否则补一次 |
+
+- 触发脚本：`trigger\dispatch_report.py`，用项目 venv 的 python 运行；GitHub 凭据运行时从
+  Git Credential Manager 现取，不落盘、不写进代码。
+- 执行日志：`logs\dispatch_<日期>.log`（已 gitignore）。
+- 手动触发一次：`.venv\Scripts\python.exe trigger\dispatch_report.py`
+- 连通性自检（该日无数据，不会发消息）：`.venv\Scripts\python.exe trigger\dispatch_report.py --date 2026-12-31`
+- 改发报时间：把「禁售日报云端触发」的触发时间改到目标时间前 2 分钟，并保证兜底任务排在它之后。
+- **前提**：任务以当前登录用户身份运行，电脑需处于开机且已登录状态（锁屏无妨；关机或注销当天跑不了，
+  开机后 `StartWhenAvailable` 会补跑一次）。
 
 ## 发送条件规则
 
