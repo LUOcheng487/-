@@ -2,11 +2,10 @@ name: 禁售日报推送
 
 on:
   schedule:
-    # GitHub cron 用UTC：3:05 UTC = 北京时间 11:05
-    # 之所以放在11点后：脚本会检查"今天11:00前是否已推送过禁售数据"，
-    # 没有推送则当天不发钉钉，避免发空报表/旧数据。
-    # 注意：GitHub 定时任务可能有几分钟延迟，属正常现象
-    - cron: '5 3 * * *'
+    # GitHub cron 用UTC：1:00 UTC = 北京时间 09:00
+    # 发送规则：只要仓库 data/ 里有"报告日期(昨天)"的禁售记录就发；没有则当天不发。
+    # 注意：GitHub 定时任务可能有几分钟到数小时的延迟，属平台排队，非脚本问题
+    - cron: '0 1 * * *'
   workflow_dispatch:
     inputs:
       date:
@@ -14,7 +13,7 @@ on:
         required: false
         default: ''
       force:
-        description: '忽略闸门强制发送（填 1：即使今天11点前没同步也发）'
+        description: '报告日无数据也强制发送（填 1 生效）'
         required: false
         default: ''
 
@@ -41,5 +40,4 @@ jobs:
           DING_SECRET: ${{ secrets.DING_SECRET }}
           REPORT_DATE: ${{ github.event.inputs.date }}
           FORCE: ${{ github.event.inputs.force }}
-          GATE_TIME: '11:00'
         run: python report/daily_report.py --data-dir data

@@ -340,15 +340,15 @@ def main():
     ap.add_argument("--excel-dir", default=None, help="本地：D:\\Excel 原始目录(优先)")
     ap.add_argument("--date", default=None, help="报告日期YYYY-MM-DD，默认=北京时间昨天")
     ap.add_argument("--gate-time", default=None,
-                    help="数据同步闸门 HH:MM（北京），最近同步早于今天该时刻则当天不发；"
-                         "传空串关闭闸门。默认取环境变量 GATE_TIME，否则 11:00")
+                    help="可选：数据同步闸门 HH:MM（北京），最近同步早于今天该时刻则当天不发；"
+                         "默认关闭，此时只要报告日有禁售数据就发。默认取环境变量 GATE_TIME")
     ap.add_argument("--force", action="store_true",
-                    help="忽略闸门与空数据检查，强制发送（手动补发用）")
+                    help="忽略空数据检查，强制发送（手动补发用）")
     ap.add_argument("--dry-run", action="store_true", help="只打印消息不发送")
     args = ap.parse_args()
 
     gate_time = args.gate_time if args.gate_time is not None \
-        else os.environ.get("GATE_TIME", "11:00")
+        else os.environ.get("GATE_TIME", "")
     force = args.force or os.environ.get("FORCE", "").strip().lower() in ("1", "true", "yes")
 
     cfg_path = args.config or os.path.join(
@@ -375,22 +375,26 @@ def main():
     print("=" * 60)
 
     if args.dry_run:
-        pass_ok, reason = check_gate(args.data_dir, gate_time)
-        print(f"[闸门] {'放行' if pass_ok else '拦截'}：{reason}")
+        if gate_time:
+            pass_ok, reason = check_gate(args.data_dir, gate_time)
+            print(f"[闸门] {'放行' if pass_ok else '拦截'}：{reason}")
+        print(f"[数据] 报告日期 {target_date} 有 {len(df_all)} 条禁售记录"
+              + ("（无数据时默认不发送）" if df_all.empty else ""))
         print("[dry-run] 未发送")
         return 0
 
     if not force:
-        pass_ok, reason = check_gate(args.data_dir, gate_time)
-        print(f"[闸门] {'放行' if pass_ok else '拦截'}：{reason}")
-        if not pass_ok:
-            print(f"当天不发送钉钉：{reason}")
-            return 0
+        if gate_time:
+            pass_ok, reason = check_gate(args.data_dir, gate_time)
+            print(f"[闸门] {'放行' if pass_ok else '拦截'}：{reason}")
+            if not pass_ok:
+                print(f"当天不发送钉钉：{reason}")
+                return 0
         if df_all.empty:
             print(f"报告日期 {target_date} 在 data 中没有禁售记录，当天不发送钉钉")
             return 0
     else:
-        print("[force] 已跳过闸门与空数据检查")
+        print("[force] 已跳过空数据检查")
 
     webhook = os.environ.get("DING_WEBHOOK") or config.get("dingtalk", {}).get("webhook", "")
     secret = os.environ.get("DING_SECRET") or config.get("dingtalk", {}).get("secret", "")
